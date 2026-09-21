@@ -1,49 +1,99 @@
-from sqlalchemy import create_engine, event
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-from app.config import get_settings
+"""
+数据库模块（SQLite/SQLAlchemy 已移除）
+保留兼容性 shim，使现有 routers / models 仍可导入
+后续 Phase 2-4 迁移业务路由后，可彻底移除 shim
+"""
+from datetime import datetime, timezone
+from typing import Any, Generator
 
-settings = get_settings()
 
-# Build engine based on database type
-if settings.IS_SQLITE:
-    # SQLite mode - no pool options needed, enable WAL for better concurrency
-    engine = create_engine(
-        settings.DATABASE_URL_EFFECTIVE,
-        connect_args={"check_same_thread": False},
-        echo=settings.DEBUG,
+# ── 兼容性 shim：Session 类型 stub ──
+class Session:
+    """SQLAlchemy Session 兼容 stub，仅供类型注解使用。
+    实际调用时会抛出 RuntimeError，提示应使用 RepositoryFactory。
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        raise RuntimeError(
+            "SQLite/SQLAlchemy 已移除。请使用 RepositoryFactory 替代 Session。"
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        raise RuntimeError(
+            "SQLite/SQLAlchemy 已移除。请使用 RepositoryFactory 替代 Session。"
+        )
+
+
+# ── 兼容性 shim：declarative_base stub ──
+class _DeclarativeBaseMeta(type):
+    def __new__(mcs, name, bases, namespace):
+        return type.__new__(mcs, name, bases, namespace)
+
+
+class _Base(metaclass=_DeclarativeBaseMeta):
+    """SQLAlchemy declarative_base 兼容 stub"""
+
+    __tablename__ = ""
+    metadata = None
+    registry = None
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        raise RuntimeError(
+            "SQLite/SQLAlchemy 已移除。请使用 RepositoryFactory 替代 ORM 模型。"
+        )
+
+
+def declarative_base() -> type:
+    return _Base
+
+
+Base = _Base
+
+
+# ── 兼容性 shim：engine / SessionLocal stub ──
+class _Engine:
+    """SQLAlchemy engine 兼容 stub"""
+
+    def __getattr__(self, name: str) -> Any:
+        raise RuntimeError(
+            "SQLite/SQLAlchemy 已移除。请使用 RepositoryFactory 替代。"
+        )
+
+
+engine = _Engine()
+
+
+class _SessionLocal:
+    """SQLAlchemy sessionmaker 兼容 stub"""
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Session:
+        raise RuntimeError(
+            "SQLite/SQLAlchemy 已移除。请使用 RepositoryFactory 替代。"
+        )
+
+
+SessionLocal = _SessionLocal()
+
+
+# ── 兼容性 shim：get_db 生成器 stub ──
+def get_db() -> Generator[Any, None, None]:
+    """原 SQLAlchemy Session 依赖注入的兼容 stub。"""
+    raise RuntimeError(
+        "SQLite/SQLAlchemy 已移除。请使用 get_repositories() 替代 get_db()。"
     )
-    # Enable WAL mode for SQLite to improve concurrent read/write
-    @event.listens_for(engine, "connect")
-    def set_sqlite_pragma(dbapi_conn, connection_record):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-else:
-    # MySQL mode - connection pool
-    engine = create_engine(
-        settings.DATABASE_URL_EFFECTIVE,
-        pool_pre_ping=True,
-        pool_recycle=3600,
-        echo=settings.DEBUG,
-    )
-
-    # Ensure JSON type compatibility with MySQL 8.0
-    @event.listens_for(engine, "connect")
-    def set_sql_mode(dbapi_conn, connection_record):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("SET SESSION sql_mode='STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION'")
-        cursor.close()
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
 
 
-def get_db() -> Session:
-    """Dependency to get a database session."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# ── 辅助函数 ──
+
+def format_datetime(dt: datetime | None) -> str | None:
+    """将 datetime 格式化为 ISO 8601 字符串"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
+def now_iso() -> str:
+    """获取当前时间的 ISO 8601 字符串"""
+    return datetime.now(timezone.utc).isoformat()

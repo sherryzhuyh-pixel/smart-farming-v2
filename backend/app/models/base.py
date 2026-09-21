@@ -1,9 +1,33 @@
-from sqlalchemy import (
-    Column, BigInteger, Integer, String, Text, Date, DateTime,
-    Numeric, ForeignKey, JSON, UniqueConstraint, Index
-)
-from sqlalchemy.sql import func
-from app.database import Base
+"""
+数据模型定义（SQLAlchemy → Pydantic 迁移过渡兼容层）
+Phase 1：保留模型结构，使 routers 可导入；实际 CRUD 走 RepositoryFactory
+Phase 2-4：业务路由逐步迁移后，本文件可替换为纯 Pydantic 模型
+"""
+
+try:
+    from sqlalchemy import (
+        Column, BigInteger, Integer, String, Text, Date, DateTime,
+        Numeric, ForeignKey, JSON, UniqueConstraint, Index
+    )
+    from sqlalchemy.sql import func
+    from app.database import Base
+except ImportError:
+    # SQLAlchemy 未安装时提供最小兼容 stub，保证模块可导入
+    class _StubColumn:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    Column = _StubColumn
+    BigInteger = Integer = String = Text = Date = DateTime = Numeric = _StubColumn
+    ForeignKey = JSON = UniqueConstraint = Index = _StubColumn
+
+    class _StubFunc:
+        def now(self):
+            pass
+
+    func = _StubFunc()
+
+    from app.database import Base
 
 
 class Breed(Base):
