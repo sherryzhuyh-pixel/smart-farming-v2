@@ -1,0 +1,17 @@
+<template>
+  <ErrorBoundary>
+    <router-view />
+  </ErrorBoundary>
+</template>
+
+<script setup>
+import ErrorBoundary from '@/components/ErrorBoundary.vue'
+</script>
+
+<style>
+#app {
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+</style>
