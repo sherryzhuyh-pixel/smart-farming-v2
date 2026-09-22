@@ -1,0 +1,171 @@
+import client from './client.js'
+import { mockApi } from './mock.js'
+
+const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
+
+// ==================== 批次管理 ====================
+
+async function getBatches(params = {}) {
+  if (USE_MOCK) return mockApi.getBatches(params)
+  return client.get('/batches', { params })
+}
+
+async function getBatchDetail(id) {
+  if (USE_MOCK) return mockApi.getBatchDetail(id)
+  const res = await client.get(`/batches/${id}`)
+  const data = res.data
+  return {
+    code: res.code,
+    data: {
+      ...data,
+      breed_name: data.breed?.breed_name || null,
+      breed_id: data.breed?.id || null,
+      house_name: data.house?.house_name || null,
+      house_id: data.house?.id || null,
+    },
+  }
+}
+
+// ==================== 个体管理 ====================
+
+async function getIndividuals(params = {}) {
+  if (USE_MOCK) return mockApi.getIndividuals(params)
+  return client.get('/individuals', { params })
+}
+
+async function getIndividualDetail(id) {
+  if (USE_MOCK) return mockApi.getIndividualDetail(id)
+  // 后端无独立个体详情路由，复用 list 接口
+  const res = await client.get('/individuals', { params: { keyword: id, page_size: 1 } })
+  const item = res.data.list?.[0]
+  return {
+    code: res.code,
+    data: item
+      ? {
+          ...item,
+          weight_in: null,
+          age_day_in: null,
+        }
+      : null,
+  }
+}
+
+// ==================== 生长曲线 ====================
+
+async function getGrowthCurve(params) {
+  if (USE_MOCK) return mockApi.getGrowthCurve(params)
+  const { animal_id } = params
+  const res = await client.get(`/individuals/${animal_id}/growth-curve`)
+  const data = res.data
+
+  return {
+    code: res.code,
+    data: {
+      records: (data.growth_data || []).map((r) => ({
+        ...r,
+        id: r.id || `${animal_id}-${r.age_days}`,
+        animal_id,
+        batch_id: data.animal?.batch_id || null,
+      })),
+      std_curve: (data.standard_curve || []).map((s) => ({
+        age_days: s.age_days,
+        std_weight: s.weight,
+      })),
+    },
+  }
+}
+
+async function getBatchGrowthSummary(batchId) {
+  if (USE_MOCK) return mockApi.getBatchGrowthSummary(batchId)
+  const res = await client.get(`/batches/${batchId}/growth-summary`)
+  const data = res.data
+
+  return {
+    code: res.code,
+    data: {
+      count: data.sample_size || 0,
+      avg: data.avg_weight || 0,
+      min: data.min_weight || 0,
+      max: data.max_weight || 0,
+      q1: null,
+      median: null,
+      q3: null,
+      std: data.std_weight || 0,
+    },
+  }
+}
+
+// ==================== 健康记录 ====================
+
+async function getHealthRecords(params = {}) {
+  if (USE_MOCK) return mockApi.getHealthRecords(params)
+  return client.get('/health/records', { params })
+}
+
+// ==================== 养殖操作 ====================
+
+async function getBreedingOperations(batchId) {
+  if (USE_MOCK) return mockApi.getBreedingOperations(batchId)
+  // 后端无独立操作列表路由，从 lifecycle 提取
+  const res = await client.get(`/batches/${batchId}/lifecycle`)
+  const ops = res.data.recent_operations || []
+
+  return {
+    code: res.code,
+    data: {
+      list: ops.map((o) => ({
+        id: o.id,
+        batch_id: batchId,
+        operation_type: o.op_type,
+        operation_date: o.op_date,
+        operation_name: o.op_type || '',
+        operator: o.operator,
+        detail: o.remark || '',
+      })),
+    },
+  }
+}
+
+// ==================== 环境参数 ====================
+
+async function getEnvironmentParams(params = {}) {
+  if (USE_MOCK) return mockApi.getEnvironmentParams(params)
+  const res = await client.get('/environment/records', { params })
+
+  return {
+    code: res.code,
+    data: {
+      list: res.data.list.map((item) => ({
+        ...item,
+        record_date: item.record_time,
+      })),
+    },
+  }
+}
+
+// ==================== 认证 ====================
+
+async function login(credentials) {
+  const resp = await client.post('/auth/login', credentials)
+  if (resp.data.code !== 0) {
+    throw new Error(resp.data.message || '登录失败')
+  }
+  return resp.data.data
+}
+
+// ==================== 导出 ====================
+
+const api = {
+  getBatches,
+  getBatchDetail,
+  getIndividuals,
+  getIndividualDetail,
+  getGrowthCurve,
+  getBatchGrowthSummary,
+  getHealthRecords,
+  getBreedingOperations,
+  getEnvironmentParams,
+  login,
+}
+
+export default api
