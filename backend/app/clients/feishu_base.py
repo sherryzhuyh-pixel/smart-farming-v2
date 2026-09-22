@@ -265,7 +265,13 @@ class FeishuBaseClient:
         field_name: str,
         value: Any,
     ) -> AsyncIterator[dict]:
-        """按字段值搜索记录（使用 filter 表达式）"""
+        """按字段值搜索记录（使用 filter 表达式）
+        字段名使用白名单校验，字符串值使用 JSON 序列化转义，防止注入
+        """
+        import re
+        if not re.match(r'^[\w\u4e00-\u9fff]+$', field_name):
+            raise ValueError(f"Invalid field_name: {field_name}")
+
         # 飞书 filter 语法: CurrentValue.["字段名"] = "值"
         if isinstance(value, bool):
             val_str = "true" if value else "false"
@@ -273,9 +279,10 @@ class FeishuBaseClient:
         elif isinstance(value, (int, float)):
             filter_expr = f'CurrentValue.["{field_name}"] = {value}'
         else:
-            # 对字符串值进行转义，避免 filter 语法错误
-            safe_value = str(value).replace('"', '\\"')
-            filter_expr = f'CurrentValue.["{field_name}"] = "{safe_value}"'
+            # 使用 JSON 序列化安全转义字符串值
+            import json
+            safe_value = json.dumps(str(value))
+            filter_expr = f'CurrentValue.["{field_name}"] = {safe_value}'
         async for record in self.list_records(
             table_id, filter_expr=filter_expr
         ):

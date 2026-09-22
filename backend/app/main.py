@@ -161,8 +161,8 @@ async def _ensure_admin_user(repos: RepositoryFactory):
 # Public routes (no auth required)
 app.include_router(auth.router, prefix=settings.API_V2_PREFIX)
 
-# Protected routes (auth required)
-dependencies = [Depends(get_current_user)] if not settings.DEBUG else []
+# Protected routes (auth required) — DEBUG mode does NOT bypass auth
+dependencies = [Depends(get_current_user)]
 
 api_prefix = settings.API_V2_PREFIX
 app.include_router(

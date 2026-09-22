@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     CACHE_SIZE_LIMIT: int = 50 * 1024 * 1024  # 50MB
 
     # ── JWT Authentication ──
-    JWT_SECRET_KEY: str = "your-secret-key-change-in-production"
+    JWT_SECRET_KEY: str = ""  # Must be set via env, no default
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
 
@@ -46,4 +46,9 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     settings = Settings()
+    if not settings.JWT_SECRET_KEY:
+        raise RuntimeError(
+            "JWT_SECRET_KEY is not configured. "
+            "Generate a random key: `python -c \"import secrets; print(secrets.token_urlsafe(64))\"`"
+        )
     return settings

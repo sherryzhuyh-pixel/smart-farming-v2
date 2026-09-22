@@ -1,10 +1,21 @@
 """库存管理 API (Feishu Base 版本)"""
 from typing import Optional
+import asyncio
 from fastapi import APIRouter, Depends, Query, Body
 from datetime import date, timedelta
 
 from app.repositories import get_repositories, RepositoryFactory
 from app.utils.response import success_response, paginated_response, error_response
+
+# 进程级库存锁（防止并发超卖）
+_inventory_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_inv_lock(inventory_id: str) -> asyncio.Lock:
+    """获取指定库存物料的锁"""
+    if inventory_id not in _inventory_locks:
+        _inventory_locks[inventory_id] = asyncio.Lock()
+    return _inventory_locks[inventory_id]
 
 router = APIRouter(prefix="/inventory", tags=["库存管理"])
 
@@ -268,42 +279,47 @@ async def create_transaction(
         ttype_int = raw_tt
         ttype_str = {1: "in", 2: "out", 3: "adjust", 4: "loss"}.get(raw_tt, str(raw_tt))
 
-    # 余额计算方向
-    if ttype_int in (2, 4):  # 出库/损耗
-        balance_delta = -abs(qty)
-    else:  # 入库/调整
-        balance_delta = abs(qty)
-    current_qty = float(inv.get("quantity", 0) or 0)
-    new_balance = current_qty + balance_delta
-    if new_balance < 0:
-        return error_response(422, "库存不足，无法出库")
+    # 余额计算方向（在锁内重新读取库存，防止并发超卖）
+    async with _get_inv_lock(inventory_id):
+        inv = await repos.inventory.get_by_id(inventory_id)
+        if not inv:
+            return error_response(404, "库存物料不存在")
 
-    # 处理日期
-    trans_date_raw = data.get("trans_date")
-    if isinstance(trans_date_raw, str):
-        from datetime import datetime as _dt
-        try:
-            trans_date_val = _dt.strptime(trans_date_raw, "%Y-%m-%d").date()
-        except ValueError:
-            trans_date_val = date.today()
-    else:
-        trans_date_val = trans_date_raw or date.today()
+        if ttype_int in (2, 4):  # 出库/损耗
+            balance_delta = -abs(qty)
+        else:  # 入库/调整
+            balance_delta = abs(qty)
+        current_qty = float(inv.get("quantity", 0) or 0)
+        new_balance = current_qty + balance_delta
+        if new_balance < 0:
+            return error_response(422, "库存不足，无法出库")
 
-    # 创建流水记录
-    trans = await repos.inv_trans.create({
-        "inventory_id": inventory_id,
-        "trans_type": ttype_int,
-        "trans_date": str(trans_date_val),
-        "quantity": qty,
-        "balance": new_balance,
-        "ref_type": data.get("ref_type"),
-        "ref_id": data.get("ref_id"),
-        "operator": data.get("operator"),
-        "remark": data.get("remark") or data.get("reason"),
-    })
+        # 处理日期
+        trans_date_raw = data.get("trans_date")
+        if isinstance(trans_date_raw, str):
+            from datetime import datetime as _dt
+            try:
+                trans_date_val = _dt.strptime(trans_date_raw, "%Y-%m-%d").date()
+            except ValueError:
+                trans_date_val = date.today()
+        else:
+            trans_date_val = trans_date_raw or date.today()
 
-    # 更新库存数量
-    await repos.inventory.update(inventory_id, {"quantity": new_balance})
+        # 创建流水记录
+        trans = await repos.inv_trans.create({
+            "inventory_id": inventory_id,
+            "trans_type": ttype_int,
+            "trans_date": str(trans_date_val),
+            "quantity": qty,
+            "balance": new_balance,
+            "ref_type": data.get("ref_type"),
+            "ref_id": data.get("ref_id"),
+            "operator": data.get("operator"),
+            "remark": data.get("remark") or data.get("reason"),
+        })
+
+        # 更新库存数量
+        await repos.inventory.update(inventory_id, {"quantity": new_balance})
 
     return success_response({
         "id": trans.get("_record_id"),
