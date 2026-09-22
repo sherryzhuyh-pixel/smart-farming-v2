@@ -1,35 +1,33 @@
-"""溯源查询 API"""
+"""溯源查询 API (Feishu Base 版本)"""
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import func, asc
 
-from app.database import get_db
-from app.models import TraceabilityChain, AnimalIndividual, Batch, Breed, House, HealthRecord
+from app.repositories import get_repositories, RepositoryFactory
 from app.utils.response import success_response, error_response
 
 router = APIRouter(prefix="/traceability", tags=["溯源查询"])
 
+stage_text_map = {1: "种鸡", 2: "种蛋", 3: "孵化", 4: "鸡苗", 5: "养殖", 6: "出栏", 7: "销售"}
+
 
 @router.get("/completeness")
-def get_traceability_completeness(
-    batch_id: Optional[int] = Query(None),
-    db: Session = Depends(get_db),
+async def get_traceability_completeness(
+    batch_id: Optional[str] = Query(None),
+    repos: RepositoryFactory = Depends(get_repositories),
 ):
-    """批次溯源完整度（batch_id为可选，不传则返回全部批次的完整度统计）"""
+    """批次溯源完整度"""
     if batch_id is not None:
-        batch = db.query(Batch).filter(Batch.id == batch_id).first()
+        batch = await repos.batch.get_by_id(batch_id)
         if not batch:
             return error_response(404, "批次不存在")
 
-        stage_text_map = {1: "种鸡", 2: "种蛋", 3: "孵化", 4: "鸡苗", 5: "养殖", 6: "出栏", 7: "销售"}
-        chain_items = db.query(TraceabilityChain).filter(TraceabilityChain.batch_id == batch_id).all()
+        chains = await repos.traceability.filter_by("batch_id", batch_id)
 
         stage_details = []
         total_stages = 7
         covered = set()
         for stage in range(1, 8):
-            nodes = [c for c in chain_items if c.stage == stage]
+            nodes = [c for c in chains if c.get("stage") == stage]
             is_complete = len(nodes) > 0
             if is_complete:
                 covered.add(stage)
@@ -44,7 +42,7 @@ def get_traceability_completeness(
 
         return success_response({
             "batch_id": batch_id,
-            "batch_no": batch.batch_no,
+            "batch_no": batch.get("batch_no"),
             "completeness": {
                 "total_stages": total_stages,
                 "covered_stages": len(covered),
@@ -54,32 +52,32 @@ def get_traceability_completeness(
             "stage_details": stage_details,
         })
 
-    # 不传batch_id：返回全量批次的完整度统计
-    # 使用分页防止OOM
-    batches = db.query(Batch).limit(500).all()
+    # 不传 batch_id：返回全量批次的完整度统计
+    batches = await repos.batch.list_all()
+    batches = batches[:500]
     if not batches:
         return success_response({"message": "暂无批次数据", "summary": {"total_batches": 0, "avg_completeness": 0}})
 
-    # 优化：使用IN查询一次性拉取所有chain数据，避免N+1
-    batch_ids = [b.id for b in batches]
-    all_chains = db.query(TraceabilityChain).filter(TraceabilityChain.batch_id.in_(batch_ids)).all()
-    # 按batch_id分组
+    batch_ids = [b.get("_record_id") for b in batches]
+    all_chains = await repos.traceability.list_all()
     chains_by_batch = {}
     for c in all_chains:
-        chains_by_batch.setdefault(c.batch_id, []).append(c)
+        bid = c.get("batch_id")
+        if bid in batch_ids:
+            chains_by_batch.setdefault(bid, []).append(c)
 
-    # 汇总各批次的溯源完整度
     total_pct = 0
     items = []
     for b in batches:
-        chain = chains_by_batch.get(b.id, [])
+        bid = b.get("_record_id")
+        chain = chains_by_batch.get(bid, [])
         expected = {1, 2, 3, 4, 5, 6, 7}
-        covered = {c.stage for c in chain}
+        covered = {c.get("stage") for c in chain}
         pct = round(len(covered & expected) / len(expected) * 100, 2)
         total_pct += pct
         items.append({
-            "batch_id": b.id,
-            "batch_no": b.batch_no,
+            "batch_id": bid,
+            "batch_no": b.get("batch_no"),
             "completeness_pct": pct,
             "covered_stages": len(covered & expected),
         })
@@ -95,62 +93,70 @@ def get_traceability_completeness(
 
 
 @router.get("/{code}")
-def trace_by_code(code: str, db: Session = Depends(get_db)):
+async def trace_by_code(code: str, repos: RepositoryFactory = Depends(get_repositories)):
     """溯源码查询"""
     # 先尝试按个体溯源码查询
-    animal = db.query(AnimalIndividual, Batch, Breed, House).join(Batch, AnimalIndividual.batch_id == Batch.id).join(Breed, AnimalIndividual.breed_id == Breed.id).join(House, AnimalIndividual.house_id == House.id).filter(AnimalIndividual.traceability_code == code).first()
+    animals = await repos.animal.list_all()
+    animal = next((a for a in animals if a.get("traceability_code") == code), None)
+
+    batches_map = {b.get("_record_id"): b for b in await repos.batch.list_all()}
+    breeds_map = {b.get("_record_id"): b for b in await repos.breed.list_all()}
+    houses_map = {h.get("_record_id"): h for h in await repos.house.list_all()}
 
     if animal:
-        ai, batch, breed, house = animal
+        batch = batches_map.get(str(animal.get("batch_id", "")))
+        breed = breeds_map.get(str(animal.get("breed_id", "")))
+        house = houses_map.get(str(batch.get("house_id")) if batch else "")
         trace_type = 2
         trace_type_text = "个体溯源"
+        ai = animal
     else:
         # 尝试按批次溯源码查询
-        batch = db.query(Batch, Breed, House).join(Breed, Batch.breed_id == Breed.id).join(House, Batch.house_id == House.id).filter(Batch.batch_no == code).first()
+        batch = next((b for b in batches_map.values() if b.get("batch_no") == code), None)
         if batch:
-            b, breed, house = batch
+            breed = breeds_map.get(str(batch.get("breed_id", "")))
+            house = houses_map.get(str(batch.get("house_id", "")))
             trace_type = 1
             trace_type_text = "批次溯源"
             ai = None
-            batch = b
         else:
             return error_response(404, "溯源码不存在")
 
     # 构建溯源链
-    batch_id = batch.id
-    chain_items = db.query(TraceabilityChain).filter(TraceabilityChain.batch_id == batch_id).order_by(asc(TraceabilityChain.event_date)).all()
-
-    stage_text_map = {
-        1: "种鸡", 2: "种蛋", 3: "孵化", 4: "鸡苗", 5: "养殖", 6: "出栏", 7: "销售"
-    }
+    batch_id = batch.get("_record_id")
+    all_chains = await repos.traceability.list_all()
+    chain_items = [c for c in all_chains if c.get("batch_id") == batch_id]
+    chain_items.sort(key=lambda x: x.get("event_date") or "")
 
     chain = []
     for tc in chain_items:
         chain.append({
-            "stage": tc.stage,
-            "stage_text": stage_text_map.get(tc.stage, "未知"),
-            "event_date": str(tc.event_date) if tc.event_date else None,
-            "event_desc": tc.event_desc,
-            "location": tc.location,
-            "operator": tc.operator,
+            "stage": tc.get("stage"),
+            "stage_text": stage_text_map.get(tc.get("stage"), "未知"),
+            "event_date": str(tc.get("event_date")) if tc.get("event_date") else None,
+            "event_desc": tc.get("event_desc"),
+            "location": tc.get("location"),
+            "operator": tc.get("operator"),
         })
 
     # 补充健康记录作为溯源节点
-    health_records = db.query(HealthRecord).filter(HealthRecord.batch_id == batch_id).order_by(asc(HealthRecord.record_date)).all()
+    all_health = await repos.health.list_all()
+    health_records = [h for h in all_health if h.get("batch_id") == batch_id]
+    health_records.sort(key=lambda x: x.get("record_date") or "")
     for hr in health_records:
         chain.append({
             "stage": 5,
             "stage_text": "养殖",
-            "event_date": str(hr.record_date),
-            "event_desc": f"{hr.event_name}: {hr.drug_name or ''}",
-            "location": house.house_name if house else None,
-            "operator": hr.veterinarian,
+            "event_date": str(hr.get("record_date")),
+            "event_desc": f"{hr.get('event_name')}: {hr.get('drug_name') or ''}",
+            "location": house.get("house_name") if house else None,
+            "operator": hr.get("veterinarian"),
         })
 
     chain.sort(key=lambda x: x["event_date"] or "")
 
     # 完整度计算
-    expected_stages = {4, 5, 6, 7}  # 鸡苗、养殖、出栏、销售
+    expected_stages = {4, 5, 6, 7}
     covered = set(c["stage"] for c in chain)
     total_stages = len(expected_stages)
     covered_stages = len(covered & expected_stages)
@@ -161,9 +167,9 @@ def trace_by_code(code: str, db: Session = Depends(get_db)):
         "trace_type": trace_type,
         "trace_type_text": trace_type_text,
         "batch": {
-            "batch_no": batch.batch_no,
-            "house_name": house.house_name if house else None,
-            "responsible_person": batch.responsible_person,
+            "batch_no": batch.get("batch_no"),
+            "house_name": house.get("house_name") if house else None,
+            "responsible_person": batch.get("responsible_person"),
         },
         "chain": chain,
         "completeness": {
@@ -176,12 +182,12 @@ def trace_by_code(code: str, db: Session = Depends(get_db)):
 
     if ai:
         result["animal"] = {
-            "animal_no": ai.animal_no,
-            "breed_name": breed.breed_name if breed else None,
-            "gender": ai.gender,
-            "gender_text": "公" if ai.gender == 1 else ("母" if ai.gender == 2 else "未知"),
-            "date_birth": str(ai.date_birth) if ai.date_birth else None,
-            "date_in": str(ai.date_in) if ai.date_in else None,
+            "animal_no": ai.get("animal_no"),
+            "breed_name": breed.get("breed_name") if breed else None,
+            "gender": ai.get("gender"),
+            "gender_text": "公" if ai.get("gender") == 1 else ("母" if ai.get("gender") == 2 else "未知"),
+            "date_birth": str(ai.get("date_birth")) if ai.get("date_birth") else None,
+            "date_in": str(ai.get("date_in")) if ai.get("date_in") else None,
         }
 
     return success_response(result)

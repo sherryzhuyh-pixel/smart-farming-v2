@@ -21,6 +21,10 @@ from app.routers import (
     inventory,
     config,
     auth,
+    health,
+    environment,
+    feed,
+    market,
 )
 
 settings = get_settings()
@@ -187,6 +191,18 @@ app.include_router(
 )
 app.include_router(
     config.router, prefix=api_prefix, dependencies=dependencies
+)
+app.include_router(
+    health.router, prefix=api_prefix, dependencies=dependencies
+)
+app.include_router(
+    environment.router, prefix=api_prefix, dependencies=dependencies
+)
+app.include_router(
+    feed.router, prefix=api_prefix, dependencies=dependencies
+)
+app.include_router(
+    market.router, prefix=api_prefix, dependencies=dependencies
 )
 
 

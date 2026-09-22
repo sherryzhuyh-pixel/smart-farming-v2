@@ -1,81 +1,111 @@
-"""财务收支管理 API"""
+"""财务收支管理 API (Feishu Base 版本)"""
 from typing import Optional
 from fastapi import APIRouter, Depends, Query, Body
-from sqlalchemy.orm import Session
-from sqlalchemy import func, desc, and_
 from datetime import date
+from collections import defaultdict
 
-from app.database import get_db
-from app.models import FinancialTransaction, Batch
+from app.repositories import get_repositories, RepositoryFactory
 from app.utils.response import success_response, paginated_response, error_response
 
 router = APIRouter(prefix="/financial-transactions", tags=["财务收支管理"])
 
 
 @router.get("")
-def list_transactions(
+async def list_transactions(
     transaction_type: Optional[int] = Query(None),
     category: Optional[str] = Query(None),
-    batch_id: Optional[int] = Query(None),
+    batch_id: Optional[str] = Query(None),
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     keyword: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db),
+    repos: RepositoryFactory = Depends(get_repositories),
 ):
     """查询收支列表"""
-    query = db.query(FinancialTransaction, Batch.batch_no).outerjoin(Batch, FinancialTransaction.batch_id == Batch.id)
-    if transaction_type is not None:
-        query = query.filter(FinancialTransaction.transaction_type == transaction_type)
-    if category:
-        query = query.filter(FinancialTransaction.category == category)
-    if batch_id is not None:
-        query = query.filter(FinancialTransaction.batch_id == batch_id)
-    if start_date:
-        query = query.filter(FinancialTransaction.transaction_date >= start_date)
-    if end_date:
-        query = query.filter(FinancialTransaction.transaction_date <= end_date)
-    if keyword:
-        query = query.filter(
-            (FinancialTransaction.category.contains(keyword)) |
-            (FinancialTransaction.payee_payer.contains(keyword)) |
-            (FinancialTransaction.remark.contains(keyword))
-        )
+    # 预加载批次映射
+    batches_map = {b.get("_record_id"): b.get("batch_no") for b in await repos.batch.list_all()}
+
+    transactions = await repos.financial.list_all()
+    filtered = []
+    for ft in transactions:
+        if transaction_type is not None and ft.get("transaction_type") != transaction_type:
+            continue
+        if category and ft.get("category") != category:
+            continue
+        if batch_id is not None and ft.get("batch_id") != batch_id:
+            continue
+        txn_date = ft.get("transaction_date")
+        if start_date and txn_date:
+            try:
+                if date.fromisoformat(str(txn_date)) < start_date:
+                    continue
+            except Exception:
+                pass
+        if end_date and txn_date:
+            try:
+                if date.fromisoformat(str(txn_date)) > end_date:
+                    continue
+            except Exception:
+                pass
+        if keyword:
+            kw = keyword.lower()
+            if not (
+                kw in (ft.get("category") or "").lower()
+                or kw in (ft.get("payee_payer") or "").lower()
+                or kw in (ft.get("remark") or "").lower()
+            ):
+                continue
+        filtered.append(ft)
 
     # 汇总
-    income = db.query(func.sum(FinancialTransaction.amount)).filter(FinancialTransaction.transaction_type == 1)
-    expense = db.query(func.sum(FinancialTransaction.amount)).filter(FinancialTransaction.transaction_type == 2)
-    if start_date:
-        income = income.filter(FinancialTransaction.transaction_date >= start_date)
-        expense = expense.filter(FinancialTransaction.transaction_date >= start_date)
-    if end_date:
-        income = income.filter(FinancialTransaction.transaction_date <= end_date)
-    if batch_id is not None:
-        income = income.filter(FinancialTransaction.batch_id == batch_id)
-        expense = expense.filter(FinancialTransaction.batch_id == batch_id)
+    def _amount_sum(t_type, s_date, e_date, b_id):
+        total = 0
+        for ft in transactions:
+            if ft.get("transaction_type") != t_type:
+                continue
+            if b_id is not None and ft.get("batch_id") != b_id:
+                continue
+            txn_date = ft.get("transaction_date")
+            if s_date and txn_date:
+                try:
+                    if date.fromisoformat(str(txn_date)) < s_date:
+                        continue
+                except Exception:
+                    pass
+            if e_date and txn_date:
+                try:
+                    if date.fromisoformat(str(txn_date)) > e_date:
+                        continue
+                except Exception:
+                    pass
+            total += float(ft.get("amount", 0) or 0)
+        return total
 
-    total_income = income.scalar() or 0
-    total_expense = expense.scalar() or 0
-    net_profit = float(total_income) - float(total_expense)
+    total_income = _amount_sum(1, start_date, end_date, batch_id)
+    total_expense = _amount_sum(2, start_date, end_date, batch_id)
+    net_profit = total_income - total_expense
 
-    total = query.count()
-    items = query.order_by(desc(FinancialTransaction.transaction_date)).offset((page - 1) * page_size).limit(page_size).all()
+    total = len(filtered)
+    filtered.sort(key=lambda x: x.get("transaction_date") or "", reverse=True)
+    start = (page - 1) * page_size
+    page_items = filtered[start : start + page_size]
+
     data = [
         {
-            "id": ft.id,
-            "transaction_type": ft.transaction_type,
-            "transaction_type_text": "收入" if ft.transaction_type == 1 else "支出",
-            "category": ft.category,
-            "amount": float(ft.amount),
-            "batch_id": ft.batch_id,
-            "batch_no": batch_no,
-            "transaction_date": str(ft.transaction_date),
-            "payee_payer": ft.payee_payer,
-            "remark": ft.remark,
-            "voucher_no": ft.voucher_no,
+            "id": ft.get("_record_id"),
+            "transaction_type": ft.get("transaction_type"),
+            "transaction_type_text": "收入" if ft.get("transaction_type") == 1 else "支出",
+            "category": ft.get("category"),
+            "amount": float(ft.get("amount", 0) or 0),
+            "batch_id": ft.get("batch_id"),
+            "batch_no": batches_map.get(str(ft.get("batch_id"))),
+            "transaction_date": str(ft.get("transaction_date")),
+            "payee_payer": ft.get("payee_payer"),
+            "remark": ft.get("remark"),
+            "voucher_no": ft.get("voucher_no"),
         }
-        for ft, batch_no in items
+        for ft in page_items
     ]
     return {
         "code": 0,
@@ -98,12 +128,11 @@ def list_transactions(
 
 
 @router.post("")
-def create_transaction(
+async def create_transaction(
     data: dict = Body(...),
-    db: Session = Depends(get_db),
+    repos: RepositoryFactory = Depends(get_repositories),
 ):
     """创建收支记录"""
-    # 必填字段校验
     if not data.get("transaction_type"):
         return error_response(422, "transaction_type不能为空")
     if data.get("amount") is None:
@@ -111,7 +140,6 @@ def create_transaction(
     if not data.get("transaction_date"):
         return error_response(422, "transaction_date不能为空")
 
-    # 处理日期字段，SQLite/通用驱动不接受Python date对象以外的输入
     txn_date_raw = data.get("transaction_date")
     if isinstance(txn_date_raw, str):
         try:
@@ -121,59 +149,59 @@ def create_transaction(
     else:
         txn_date_val = txn_date_raw or date.today()
 
-    ft = FinancialTransaction(
-        transaction_type=data.get("transaction_type"),
-        category=data.get("category", ""),
-        amount=data.get("amount"),
-        batch_id=data.get("batch_id"),
-        ref_table=data.get("ref_table"),
-        ref_id=data.get("ref_id"),
-        transaction_date=txn_date_val,
-        payee_payer=data.get("payee_payer"),
-        remark=data.get("remark"),
-        voucher_no=data.get("voucher_no"),
-        created_by=data.get("created_by"),
-    )
-    db.add(ft)
-    db.commit()
-    db.refresh(ft)
+    record = await repos.financial.create({
+        "transaction_type": data.get("transaction_type"),
+        "category": data.get("category", ""),
+        "amount": data.get("amount"),
+        "batch_id": data.get("batch_id"),
+        "ref_table": data.get("ref_table"),
+        "ref_id": data.get("ref_id"),
+        "transaction_date": str(txn_date_val),
+        "payee_payer": data.get("payee_payer"),
+        "remark": data.get("remark"),
+        "voucher_no": data.get("voucher_no"),
+        "created_by": data.get("created_by"),
+    })
     return success_response({
-        "id": ft.id,
-        "transaction_type": ft.transaction_type,
-        "category": ft.category,
-        "amount": float(ft.amount),
-        "transaction_date": str(ft.transaction_date),
-        "created_at": str(ft.created_at),
+        "id": record.get("_record_id"),
+        "transaction_type": record.get("transaction_type"),
+        "category": record.get("category"),
+        "amount": float(record.get("amount", 0) or 0),
+        "transaction_date": str(record.get("transaction_date")),
+        "created_at": str(record.get("created_at")),
     }, "创建成功")
 
 
 @router.get("/summary")
-def get_finance_summary(
+async def get_finance_summary(
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     group_by: Optional[str] = Query(None, description="month|category|batch"),
-    db: Session = Depends(get_db),
+    repos: RepositoryFactory = Depends(get_repositories),
 ):
     """收支汇总查询"""
-    query = db.query(FinancialTransaction)
-    if start_date:
-        query = query.filter(FinancialTransaction.transaction_date >= start_date)
-    if end_date:
-        query = query.filter(FinancialTransaction.transaction_date <= end_date)
+    transactions = await repos.financial.list_all()
+    filtered = []
+    for ft in transactions:
+        txn_date = ft.get("transaction_date")
+        if start_date and txn_date:
+            try:
+                if date.fromisoformat(str(txn_date)) < start_date:
+                    continue
+            except Exception:
+                pass
+        if end_date and txn_date:
+            try:
+                if date.fromisoformat(str(txn_date)) > end_date:
+                    continue
+            except Exception:
+                pass
+        filtered.append(ft)
 
-    total_income = db.query(func.sum(FinancialTransaction.amount)).filter(FinancialTransaction.transaction_type == 1)
-    total_expense = db.query(func.sum(FinancialTransaction.amount)).filter(FinancialTransaction.transaction_type == 2)
-    if start_date:
-        total_income = total_income.filter(FinancialTransaction.transaction_date >= start_date)
-        total_expense = total_expense.filter(FinancialTransaction.transaction_date >= start_date)
-    if end_date:
-        total_income = total_income.filter(FinancialTransaction.transaction_date <= end_date)
-        total_expense = total_expense.filter(FinancialTransaction.transaction_date <= end_date)
-
-    ti = total_income.scalar() or 0
-    te = total_expense.scalar() or 0
-    net = float(ti) - float(te)
-    margin = round(net / float(ti) * 100, 2) if ti else 0
+    total_income = sum(float(ft.get("amount", 0) or 0) for ft in filtered if ft.get("transaction_type") == 1)
+    total_expense = sum(float(ft.get("amount", 0) or 0) for ft in filtered if ft.get("transaction_type") == 2)
+    net = total_income - total_expense
+    margin = round(net / total_income * 100, 2) if total_income else 0
 
     result = {
         "period": {
@@ -181,8 +209,8 @@ def get_finance_summary(
             "end_date": str(end_date) if end_date else None,
         },
         "summary": {
-            "total_income": float(ti),
-            "total_expense": float(te),
+            "total_income": float(total_income),
+            "total_expense": float(total_expense),
             "net_profit": round(net, 2),
             "profit_margin": margin,
         },
@@ -192,28 +220,21 @@ def get_finance_summary(
 
     # 按分组维度聚合
     if group_by == "month":
-        from sqlalchemy import extract
-        grouped = db.query(
-            extract("year", FinancialTransaction.transaction_date).label("year"),
-            extract("month", FinancialTransaction.transaction_date).label("month"),
-            FinancialTransaction.transaction_type,
-            func.sum(FinancialTransaction.amount).label("total")
-        )
-        if start_date:
-            grouped = grouped.filter(FinancialTransaction.transaction_date >= start_date)
-        if end_date:
-            grouped = grouped.filter(FinancialTransaction.transaction_date <= end_date)
-        grouped = grouped.group_by("year", "month", FinancialTransaction.transaction_type).order_by("year", "month").all()
-
-        month_map = {}
-        for yr, mo, ttype, total_amt in grouped:
-            mkey = f"{int(yr)}-{int(mo):02d}"
-            if mkey not in month_map:
-                month_map[mkey] = {"group_key": mkey, "income": 0, "expense": 0}
-            if ttype == 1:
-                month_map[mkey]["income"] = float(total_amt)
+        month_map = defaultdict(lambda: {"group_key": "", "income": 0, "expense": 0})
+        for ft in filtered:
+            txn_date = ft.get("transaction_date")
+            if not txn_date:
+                continue
+            try:
+                d = date.fromisoformat(str(txn_date))
+                mkey = f"{d.year}-{d.month:02d}"
+            except Exception:
+                continue
+            month_map[mkey]["group_key"] = mkey
+            if ft.get("transaction_type") == 1:
+                month_map[mkey]["income"] += float(ft.get("amount", 0) or 0)
             else:
-                month_map[mkey]["expense"] = float(total_amt)
+                month_map[mkey]["expense"] += float(ft.get("amount", 0) or 0)
 
         for k, v in month_map.items():
             v["net_profit"] = round(v["income"] - v["expense"], 2)
@@ -221,19 +242,27 @@ def get_finance_summary(
             result["grouped_data"].append(v)
 
     # 科目占比
-    cats = db.query(FinancialTransaction.category, FinancialTransaction.transaction_type, func.sum(FinancialTransaction.amount)).filter(FinancialTransaction.transaction_type.in_([1, 2]))
-    if start_date:
-        cats = cats.filter(FinancialTransaction.transaction_date >= start_date)
-    if end_date:
-        cats = cats.filter(FinancialTransaction.transaction_date <= end_date)
-    cats = cats.group_by(FinancialTransaction.category, FinancialTransaction.transaction_type).all()
+    cats = defaultdict(lambda: {"income": 0, "expense": 0})
+    for ft in filtered:
+        cat = ft.get("category", "")
+        if ft.get("transaction_type") == 1:
+            cats[cat]["income"] += float(ft.get("amount", 0) or 0)
+        else:
+            cats[cat]["expense"] += float(ft.get("amount", 0) or 0)
 
-    for cat, ttype, amt in cats:
-        result["category_breakdown"].append({
-            "category": cat,
-            "type": "income" if ttype == 1 else "expense",
-            "amount": float(amt),
-        })
+    for cat, amounts in cats.items():
+        if amounts["income"] > 0:
+            result["category_breakdown"].append({
+                "category": cat,
+                "type": "income",
+                "amount": round(amounts["income"], 2),
+            })
+        if amounts["expense"] > 0:
+            result["category_breakdown"].append({
+                "category": cat,
+                "type": "expense",
+                "amount": round(amounts["expense"], 2),
+            })
 
     # 计算百分比
     total_income_all = sum(c["amount"] for c in result["category_breakdown"] if c["type"] == "income")

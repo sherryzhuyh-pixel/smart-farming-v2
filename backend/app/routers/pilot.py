@@ -1,130 +1,141 @@
-"""中试效果对比 API"""
+"""中试效果对比 API (Feishu Base 版本)"""
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from collections import defaultdict
 
-from app.database import get_db
-from app.models import PilotProject, PilotBatch, PilotIndicator, Batch, Breed, GrowthRecord
+from app.repositories import get_repositories, RepositoryFactory
 from app.utils.response import success_response, paginated_response, error_response
 
 router = APIRouter(prefix="/pilots", tags=["中试效果对比"])
 
 
 @router.get("")
-def list_pilot_projects(
+async def list_pilot_projects(
     status: Optional[int] = Query(None),
     project_type: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db),
+    repos: RepositoryFactory = Depends(get_repositories),
 ):
     """查询中试项目列表"""
-    query = db.query(PilotProject)
+    projects = await repos.pilot_project.list_all()
     if status is not None:
-        query = query.filter(PilotProject.status == status)
+        projects = [p for p in projects if p.get("status") == status]
     if project_type is not None:
-        query = query.filter(PilotProject.project_type == project_type)
-    total = query.count()
-    items = query.order_by(desc(PilotProject.created_at)).offset((page - 1) * page_size).limit(page_size).all()
+        projects = [p for p in projects if p.get("project_type") == project_type]
+
+    total = len(projects)
+    projects.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    start = (page - 1) * page_size
+    page_items = projects[start : start + page_size]
+
     data = [
         {
-            "id": p.id,
-            "project_code": p.project_code,
-            "project_name": p.project_name,
-            "project_type": p.project_type,
-            "tech_partner": p.tech_partner,
-            "channel_partner": p.channel_partner,
-            "target_scale": p.target_scale,
-            "phase": p.phase,
-            "status": p.status,
-            "start_date": str(p.start_date) if p.start_date else None,
-            "end_date": str(p.end_date) if p.end_date else None,
-            "principal": p.principal,
+            "id": p.get("_record_id"),
+            "project_code": p.get("project_code"),
+            "project_name": p.get("project_name"),
+            "project_type": p.get("project_type"),
+            "tech_partner": p.get("tech_partner"),
+            "channel_partner": p.get("channel_partner"),
+            "target_scale": p.get("target_scale"),
+            "phase": p.get("phase"),
+            "status": p.get("status"),
+            "start_date": str(p.get("start_date")) if p.get("start_date") else None,
+            "end_date": str(p.get("end_date")) if p.get("end_date") else None,
+            "principal": p.get("principal"),
         }
-        for p in items
+        for p in page_items
     ]
     return paginated_response(data, page, page_size, total)
 
 
 @router.get("/{project_id}")
-def get_pilot_project(project_id: int, db: Session = Depends(get_db)):
+async def get_pilot_project(project_id: str, repos: RepositoryFactory = Depends(get_repositories)):
     """获取中试项目详情"""
-    project = db.query(PilotProject).filter(PilotProject.id == project_id).first()
+    project = await repos.pilot_project.get_by_id(project_id)
     if not project:
         return error_response(404, "中试项目不存在")
 
     # 实验组/对照组批次
-    pilot_batches = db.query(PilotBatch, Batch.batch_no, Breed.breed_name).join(Batch, PilotBatch.batch_id == Batch.id).join(Breed, Batch.breed_id == Breed.id).filter(PilotBatch.pilot_project_id == project_id).all()
+    batches_map = {b.get("_record_id"): b for b in await repos.batch.list_all()}
+    breeds_map = {b.get("_record_id"): b for b in await repos.breed.list_all()}
+
+    pilot_batches_all = await repos.pilot_batch.list_all()
+    pilot_batches = [pb for pb in pilot_batches_all if pb.get("pilot_project_id") == project_id]
 
     experiment_batches = []
     control_batches = []
-    for pb, batch_no, breed_name in pilot_batches:
+    for pb in pilot_batches:
+        batch = batches_map.get(str(pb.get("batch_id")), {})
+        breed = breeds_map.get(str(batch.get("breed_id")), {})
         info = {
-            "id": pb.id,
-            "batch_id": pb.batch_id,
-            "batch_no": batch_no,
-            "breed_name": breed_name,
-            "group_type": pb.group_type,
-            "treatment_desc": pb.treatment_desc,
-            "dosage": pb.dosage,
-            "frequency": pb.frequency,
-            "start_date": str(pb.start_date) if pb.start_date else None,
-            "end_date": str(pb.end_date) if pb.end_date else None,
+            "id": pb.get("_record_id"),
+            "batch_id": pb.get("batch_id"),
+            "batch_no": batch.get("batch_no"),
+            "breed_name": breed.get("breed_name"),
+            "group_type": pb.get("group_type"),
+            "treatment_desc": pb.get("treatment_desc"),
+            "dosage": pb.get("dosage"),
+            "frequency": pb.get("frequency"),
+            "start_date": str(pb.get("start_date")) if pb.get("start_date") else None,
+            "end_date": str(pb.get("end_date")) if pb.get("end_date") else None,
         }
-        if pb.group_type == 1:
+        if pb.get("group_type") == 1:
             experiment_batches.append(info)
-        elif pb.group_type == 2:
+        elif pb.get("group_type") == 2:
             control_batches.append(info)
 
     return success_response({
-        "id": project.id,
-        "project_code": project.project_code,
-        "project_name": project.project_name,
-        "project_type": project.project_type,
-        "description": project.description,
-        "tech_partner": project.tech_partner,
-        "channel_partner": project.channel_partner,
-        "target_scale": project.target_scale,
-        "phase": project.phase,
-        "status": project.status,
-        "start_date": str(project.start_date) if project.start_date else None,
-        "end_date": str(project.end_date) if project.end_date else None,
-        "principal": project.principal,
+        "id": project.get("_record_id"),
+        "project_code": project.get("project_code"),
+        "project_name": project.get("project_name"),
+        "project_type": project.get("project_type"),
+        "description": project.get("description"),
+        "tech_partner": project.get("tech_partner"),
+        "channel_partner": project.get("channel_partner"),
+        "target_scale": project.get("target_scale"),
+        "phase": project.get("phase"),
+        "status": project.get("status"),
+        "start_date": str(project.get("start_date")) if project.get("start_date") else None,
+        "end_date": str(project.get("end_date")) if project.get("end_date") else None,
+        "principal": project.get("principal"),
         "experiment_batches": experiment_batches,
         "control_batches": control_batches,
     })
 
 
 @router.get("/{project_id}/comparison")
-def get_pilot_comparison(project_id: int, db: Session = Depends(get_db)):
+async def get_pilot_comparison(project_id: str, repos: RepositoryFactory = Depends(get_repositories)):
     """中试效果对比"""
-    project = db.query(PilotProject).filter(PilotProject.id == project_id).first()
+    project = await repos.pilot_project.get_by_id(project_id)
     if not project:
         return error_response(404, "中试项目不存在")
 
     # 获取实验组和对照组的指标
-    indicators = db.query(PilotIndicator, Batch.batch_no).join(Batch, PilotIndicator.batch_id == Batch.id).filter(PilotIndicator.pilot_project_id == project_id).order_by(PilotIndicator.record_date).all()
+    indicators_all = await repos.pilot_indicator.list_all()
+    indicators = [i for i in indicators_all if i.get("pilot_project_id") == project_id]
+    indicators.sort(key=lambda x: x.get("record_date") or "")
 
-    # 按组别和指标类型分组
-    from collections import defaultdict
+    batches_map = {b.get("_record_id"): b.get("batch_no") for b in await repos.batch.list_all()}
+
+    # 获取 pilot_batch 的 group_type 映射
+    pilot_batches_all = await repos.pilot_batch.list_all()
+    pb_map = {pb.get("batch_id"): pb.get("group_type") for pb in pilot_batches_all if pb.get("pilot_project_id") == project_id}
+
     exp_data = defaultdict(list)
     ctrl_data = defaultdict(list)
 
-    # 获取pilot_batch的group_type映射
-    pb_map = {pb.batch_id: pb.group_type for pb in db.query(PilotBatch).filter(PilotBatch.pilot_project_id == project_id).all()}
-
-    for ind, batch_no in indicators:
-        group = pb_map.get(ind.batch_id)
+    for ind in indicators:
+        group = pb_map.get(ind.get("batch_id"))
         item = {
-            "record_date": str(ind.record_date),
-            "indicator_type": ind.indicator_type,
-            "indicator_name": ind.indicator_name,
-            "value": float(ind.value),
-            "unit": ind.unit,
-            "batch_no": batch_no,
+            "record_date": str(ind.get("record_date")),
+            "indicator_type": ind.get("indicator_type"),
+            "indicator_name": ind.get("indicator_name"),
+            "value": float(ind.get("value", 0) or 0),
+            "unit": ind.get("unit"),
+            "batch_no": batches_map.get(str(ind.get("batch_id"))),
         }
-        key = ind.indicator_type
+        key = ind.get("indicator_type")
         if group == 1:
             exp_data[key].append(item)
         elif group == 2:
@@ -149,23 +160,26 @@ def get_pilot_comparison(project_id: int, db: Session = Depends(get_db)):
         })
 
     # 生长曲线对比
-    exp_batch_ids = [pb.batch_id for pb in db.query(PilotBatch).filter(PilotBatch.pilot_project_id == project_id, PilotBatch.group_type == 1).all()]
-    ctrl_batch_ids = [pb.batch_id for pb in db.query(PilotBatch).filter(PilotBatch.pilot_project_id == project_id, PilotBatch.group_type == 2).all()]
+    exp_batch_ids = [pb.get("batch_id") for pb in pilot_batches_all if pb.get("pilot_project_id") == project_id and pb.get("group_type") == 1]
+    ctrl_batch_ids = [pb.get("batch_id") for pb in pilot_batches_all if pb.get("pilot_project_id") == project_id and pb.get("group_type") == 2]
 
     exp_growth = []
     ctrl_growth = []
+    all_growth = await repos.growth.list_all()
     if exp_batch_ids:
-        exp_gr = db.query(GrowthRecord).filter(GrowthRecord.batch_id.in_(exp_batch_ids)).order_by(GrowthRecord.record_date).all()
+        exp_gr = [g for g in all_growth if g.get("batch_id") in exp_batch_ids]
+        exp_gr.sort(key=lambda x: x.get("record_date") or "")
         for gr in exp_gr:
-            exp_growth.append({"record_date": str(gr.record_date), "age_days": gr.age_days, "weight": float(gr.weight)})
+            exp_growth.append({"record_date": str(gr.get("record_date")), "age_days": gr.get("age_days"), "weight": float(gr.get("weight", 0) or 0)})
     if ctrl_batch_ids:
-        ctrl_gr = db.query(GrowthRecord).filter(GrowthRecord.batch_id.in_(ctrl_batch_ids)).order_by(GrowthRecord.record_date).all()
+        ctrl_gr = [g for g in all_growth if g.get("batch_id") in ctrl_batch_ids]
+        ctrl_gr.sort(key=lambda x: x.get("record_date") or "")
         for gr in ctrl_gr:
-            ctrl_growth.append({"record_date": str(gr.record_date), "age_days": gr.age_days, "weight": float(gr.weight)})
+            ctrl_growth.append({"record_date": str(gr.get("record_date")), "age_days": gr.get("age_days"), "weight": float(gr.get("weight", 0) or 0)})
 
     return success_response({
         "project_id": project_id,
-        "project_name": project.project_name,
+        "project_name": project.get("project_name"),
         "comparison": comparison,
         "growth_curve": {
             "experiment": exp_growth[:100],
@@ -175,32 +189,37 @@ def get_pilot_comparison(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{project_id}/indicators")
-def list_pilot_indicators(
-    project_id: int,
+async def list_pilot_indicators(
+    project_id: str,
     indicator_type: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db),
+    repos: RepositoryFactory = Depends(get_repositories),
 ):
     """查询中试指标列表"""
-    query = db.query(PilotIndicator).filter(PilotIndicator.pilot_project_id == project_id)
+    indicators = await repos.pilot_indicator.list_all()
+    indicators = [i for i in indicators if i.get("pilot_project_id") == project_id]
     if indicator_type is not None:
-        query = query.filter(PilotIndicator.indicator_type == indicator_type)
-    total = query.count()
-    items = query.order_by(desc(PilotIndicator.record_date)).offset((page - 1) * page_size).limit(page_size).all()
+        indicators = [i for i in indicators if i.get("indicator_type") == indicator_type]
+
+    total = len(indicators)
+    indicators.sort(key=lambda x: x.get("record_date") or "", reverse=True)
+    start = (page - 1) * page_size
+    page_items = indicators[start : start + page_size]
+
     data = [
         {
-            "id": i.id,
-            "pilot_batch_id": i.pilot_batch_id,
-            "batch_id": i.batch_id,
-            "record_date": str(i.record_date),
-            "indicator_type": i.indicator_type,
-            "indicator_name": i.indicator_name,
-            "value": float(i.value),
-            "unit": i.unit,
-            "sample_size": i.sample_size,
-            "test_method": i.test_method,
+            "id": i.get("_record_id"),
+            "pilot_batch_id": i.get("pilot_batch_id"),
+            "batch_id": i.get("batch_id"),
+            "record_date": str(i.get("record_date")),
+            "indicator_type": i.get("indicator_type"),
+            "indicator_name": i.get("indicator_name"),
+            "value": float(i.get("value", 0) or 0),
+            "unit": i.get("unit"),
+            "sample_size": i.get("sample_size"),
+            "test_method": i.get("test_method"),
         }
-        for i in items
+        for i in page_items
     ]
     return paginated_response(data, page, page_size, total)

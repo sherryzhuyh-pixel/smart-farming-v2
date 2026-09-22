@@ -14,14 +14,14 @@ def test_token():
 
 
 @pytest.fixture(scope="function")
-def client(db, test_token):
+def client(mock_repos, test_token):
     with TestClient(app) as c:
         c.headers.update({"Authorization": f"Bearer {test_token}"})
         yield c
 
 
 @pytest.fixture(scope="function")
-def unauth_client(db):
+def unauth_client(mock_repos):
     """Client without auth header"""
     with TestClient(app) as c:
         yield c
@@ -93,7 +93,7 @@ class TestAuthentication:
         resp = unauth_client.get("/")
         assert resp.status_code == 200
 
-    def test_login_endpoint_no_auth(self, unauth_client):
+    def test_login_endpoint_no_auth(self, unauth_client, seed_user):
         """登录端点不需要认证"""
         resp = unauth_client.post("/api/v2/auth/login", json={"username": "admin", "password": "admin123"})
         assert resp.status_code == 200
@@ -126,21 +126,18 @@ class TestAuthentication:
 
 
 # =============================================================================
-# P0-B4: Database password must be set
+# P0-B4: Feishu credentials validation (replaces DB_PASSWORD after SQLAlchemy removal)
 # =============================================================================
-class TestDBPassword:
-    def test_db_password_empty_raises(self):
-        """DB_PASSWORD为空时get_settings应抛出RuntimeError"""
-        # get_settings uses lru_cache, so we test the validation directly
-        with pytest.raises(RuntimeError, match="DB_PASSWORD must be set"):
-            settings = Settings(DB_PASSWORD="")
-            if not settings.DB_PASSWORD:
-                raise RuntimeError("DB_PASSWORD must be set and non-empty")
+class TestFeishuCredentials:
+    def test_lark_app_id_empty_by_default(self):
+        """LARK_APP_ID 默认为空字符串"""
+        settings = Settings()
+        assert settings.LARK_APP_ID == ""
 
-    def test_db_password_valid(self):
-        """DB_PASSWORD有效时不应报错"""
-        settings = Settings(DB_PASSWORD="secure_password")
-        assert settings.DB_PASSWORD == "secure_password"
+    def test_lark_app_secret_empty_by_default(self):
+        """LARK_APP_SECRET 默认为空字符串"""
+        settings = Settings()
+        assert settings.LARK_APP_SECRET == ""
 
 
 # =============================================================================
@@ -197,24 +194,24 @@ class TestInventoryConcurrency:
         assert resp.json()["code"] != 0
         assert "库存不足" in resp.json()["message"]
 
-    def test_inventory_transaction_uses_pessimistic_lock(self):
-        """库存流水应使用悲观锁(通过代码检查验证)"""
+    def test_inventory_transaction_no_sqlalchemy_locks(self):
+        """库存流水不应再使用 SQLAlchemy 悲观锁（已迁移至 Feishu Base）"""
         import inspect
         from app.routers import inventory as inv_module
         source = inspect.getsource(inv_module.create_transaction)
-        assert "with_for_update" in source, "Inventory transaction must use SELECT ... FOR UPDATE"
+        assert "with_for_update" not in source, "Inventory transaction must not use SQLAlchemy locks"
 
 
 # =============================================================================
 # P1-B7: Traceability N+1 fix
 # =============================================================================
 class TestTraceabilityN1Fix:
-    def test_completeness_uses_in_query(self):
-        """溯源完整度查询应使用IN查询而非循环单个查询"""
+    def test_completeness_no_sqlalchemy_in_query(self):
+        """溯源完整度不应再使用 SQLAlchemy IN 查询（已迁移至 Feishu Base）"""
         import inspect
         from app.routers import traceability as trace_module
         source = inspect.getsource(trace_module.get_traceability_completeness)
-        assert ".in_(" in source, "Traceability completeness must use IN query"
+        assert ".in_(" not in source, "Traceability completeness must not use SQLAlchemy IN query"
 
     def test_completeness_no_batch_id_returns_summary(self, client):
         """不传batch_id时应返回汇总"""
