@@ -12,15 +12,16 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # 生产环境默认配置（PythonAnywhere 部署时使用）
-os.environ.setdefault("LARK_APP_ID", "cli_" + "aad1811323789bd8")
-os.environ.setdefault("LARK_APP_SECRET", "wX1K" + "0Hrssj4LLfJ6psYjuXo4KTlcbOfA")
-os.environ.setdefault("LARK_BASE_TOKEN", "Oi1ObtIzLa7U8issGOGcO4JSneg")
-os.environ.setdefault("JWT_SECRET_KEY", "wHi_b-wglggDEP9bSbfWWCH5Vuo6H0wcKycQ4zIMxwuvTAj3n1sNxutsZFphDeOvv8xdAL3AwJEJAToYmPwfKA")
+# 请在 PythonAnywhere 环境变量中设置真实值，或复制此文件为 .env 并填入
+os.environ.setdefault("LARK_APP_ID", "cli_" + "your_app_id_here")
+os.environ.setdefault("LARK_APP_SECRET", "your_app_secret_here")
+os.environ.setdefault("LARK_BASE_TOKEN", "your_base_token_here")
+os.environ.setdefault("JWT_SECRET_KEY", "your_jwt_secret_here")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "120")
 os.environ.setdefault("CORS_ALLOWED_ORIGINS", "https://sherryzhuyh-pixel.github.io/smart-farming-v2,https://sherryzhuyh-pixel.github.io")
 os.environ.setdefault("ADMIN_USERNAME", "admin")
-os.environ.setdefault("ADMIN_PASSWORD_HASH", "$2b$12$FiT00zOtLzsmqmb14lvZBe9irr.NwzYIpxHLKzG/fOSddRmAdM2jq")
+os.environ.setdefault("ADMIN_PASSWORD_HASH", "your_password_hash_here")
 os.environ.setdefault("CACHE_DIR", "./cache")
 os.environ.setdefault("CACHE_SIZE_LIMIT", "52428800")
 os.environ.setdefault("DEBUG", "false")
