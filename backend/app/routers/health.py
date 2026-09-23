@@ -57,3 +57,10 @@ async def list_health_records(
         for r in page_items
     ]
     return paginated_response(data, page, page_size, total)
+
+
+@router.post("/records")
+async def create_health_record(data: dict, repos: RepositoryFactory = Depends(get_repositories)):
+    """创建健康记录"""
+    record = await repos.health.create(data)
+    return success_response(record, "创建成功")

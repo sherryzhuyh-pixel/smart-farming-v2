@@ -61,6 +61,12 @@ const routes = [
         name: 'InventoryManagement',
         component: () => import('@/views/InventoryManagement.vue'),
         meta: { title: '库存管理', icon: 'Box' }
+      },
+      {
+        path: 'data-management',
+        name: 'DataManagement',
+        component: () => import('@/views/DataManagement.vue'),
+        meta: { title: '数据管理', icon: 'Edit' }
       }
     ]
   },

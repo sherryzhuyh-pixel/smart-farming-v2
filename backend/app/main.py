@@ -12,11 +12,16 @@ from app.clients.feishu_base import FeishuBaseClient
 from app.repositories import RepositoryFactory
 from app.routers import (
     batches,
+    breeds,
     growth,
+    houses,
+    operations,
     performance,
     pilot,
     finance,
     profit,
+    purchases,
+    sales,
     traceability,
     inventory,
     config,
@@ -169,7 +174,16 @@ app.include_router(
     batches.router, prefix=api_prefix, dependencies=dependencies
 )
 app.include_router(
+    breeds.router, prefix=api_prefix, dependencies=dependencies
+)
+app.include_router(
     growth.router, prefix=api_prefix, dependencies=dependencies
+)
+app.include_router(
+    houses.router, prefix=api_prefix, dependencies=dependencies
+)
+app.include_router(
+    operations.router, prefix=api_prefix, dependencies=dependencies
 )
 app.include_router(
     performance.router, prefix=api_prefix, dependencies=dependencies
@@ -182,6 +196,12 @@ app.include_router(
 )
 app.include_router(
     profit.router, prefix=api_prefix, dependencies=dependencies
+)
+app.include_router(
+    purchases.router, prefix=api_prefix, dependencies=dependencies
+)
+app.include_router(
+    sales.router, prefix=api_prefix, dependencies=dependencies
 )
 app.include_router(
     traceability.router, prefix=api_prefix, dependencies=dependencies

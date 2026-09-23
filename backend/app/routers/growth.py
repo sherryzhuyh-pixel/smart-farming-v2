@@ -242,3 +242,70 @@ async def get_pedigree(animal_id: str, repos: RepositoryFactory = Depends(get_re
         "granddam_sire": granddam_sire,
         "grandsire_sire": grandsire_sire,
     })
+
+
+@router.post("/{animal_id}/growth-records")
+async def create_growth_record(
+    animal_id: str,
+    data: dict,
+    repos: RepositoryFactory = Depends(get_repositories),
+):
+    """为个体创建生长记录"""
+    ai = await repos.animal.get_by_id(animal_id)
+    if not ai:
+        return error_response(404, "个体不存在")
+    data["animal_id"] = animal_id
+    record = await repos.growth.create(data)
+    return success_response(record, "创建成功")
+
+
+@router.get("/{animal_id}")
+async def get_individual_detail(animal_id: str, repos: RepositoryFactory = Depends(get_repositories)):
+    """获取个体详情"""
+    ai = await repos.animal.get_by_id(animal_id)
+    if not ai:
+        return error_response(404, "个体不存在")
+
+    batch = await repos.batch.get_by_id(str(ai.get("batch_id", ""))) if ai.get("batch_id") else None
+    house = await repos.house.get_by_id(str(ai.get("house_id", ""))) if ai.get("house_id") else None
+    breed = await repos.breed.get_by_id(str(ai.get("breed_id", ""))) if ai.get("breed_id") else None
+
+    return success_response({
+        "id": ai.get("_record_id"),
+        "animal_no": ai.get("animal_no"),
+        "batch_id": ai.get("batch_id"),
+        "batch_no": batch.get("batch_no") if batch else None,
+        "house_id": ai.get("house_id"),
+        "house_name": house.get("house_name") if house else None,
+        "breed_id": ai.get("breed_id"),
+        "breed_name": breed.get("breed_name") if breed else None,
+        "gender": ai.get("gender"),
+        "status": ai.get("status"),
+        "date_in": str(ai.get("date_in")),
+        "weight_in": float(ai.get("weight_in")) if ai.get("weight_in") else None,
+        "age_day_in": ai.get("age_day_in"),
+        "traceability_code": ai.get("traceability_code"),
+        "dam_id": ai.get("dam_id"),
+        "sire_id": ai.get("sire_id"),
+        "created_at": ai.get("created_at"),
+    })
+
+
+@router.put("/{animal_id}")
+async def update_individual(animal_id: str, data: dict, repos: RepositoryFactory = Depends(get_repositories)):
+    """更新个体信息"""
+    existing = await repos.animal.get_by_id(animal_id)
+    if not existing:
+        return error_response(404, "个体不存在")
+    updated = await repos.animal.update(animal_id, data)
+    return success_response(updated, "更新成功")
+
+
+@router.delete("/{animal_id}")
+async def delete_individual(animal_id: str, repos: RepositoryFactory = Depends(get_repositories)):
+    """删除个体"""
+    existing = await repos.animal.get_by_id(animal_id)
+    if not existing:
+        return error_response(404, "个体不存在")
+    await repos.animal.delete(animal_id)
+    return success_response(None, "删除成功")

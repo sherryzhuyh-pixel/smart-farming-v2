@@ -468,29 +468,257 @@ async function getInventoryTransactions(inventoryId) {
   return res
 }
 
+// ==================== 品种管理 API ====================
+
+async function getBreeds(params = {}) {
+  const { keyword, page = 1, page_size = 20 } = params
+  const query = new URLSearchParams()
+  if (keyword) query.append('keyword', keyword)
+  query.append('page', page)
+  query.append('page_size', page_size)
+  return await client.get(`/breeds?${query.toString()}`)
+}
+
+async function getBreedDetail(id) {
+  return await client.get(`/breeds/${id}`)
+}
+
+async function createBreed(data) {
+  return await client.post('/breeds', data)
+}
+
+async function updateBreed(id, data) {
+  return await client.put(`/breeds/${id}`, data)
+}
+
+async function deleteBreed(id) {
+  return await client.delete(`/breeds/${id}`)
+}
+
+// ==================== 鸡舍管理 API ====================
+
+async function getHouses(params = {}) {
+  const { status, keyword, page = 1, page_size = 20 } = params
+  const query = new URLSearchParams()
+  if (status !== undefined && status !== '') query.append('status', status)
+  if (keyword) query.append('keyword', keyword)
+  query.append('page', page)
+  query.append('page_size', page_size)
+  return await client.get(`/houses?${query.toString()}`)
+}
+
+async function getHouseDetail(id) {
+  return await client.get(`/houses/${id}`)
+}
+
+async function createHouse(data) {
+  return await client.post('/houses', data)
+}
+
+async function updateHouse(id, data) {
+  return await client.put(`/houses/${id}`, data)
+}
+
+async function deleteHouse(id) {
+  return await client.delete(`/houses/${id}`)
+}
+
+// ==================== 批次 CRUD API ====================
+
+async function createBatch(data) {
+  return await client.post('/batches', data)
+}
+
+async function updateBatch(id, data) {
+  return await client.put(`/batches/${id}`, data)
+}
+
+async function deleteBatch(id) {
+  return await client.delete(`/batches/${id}`)
+}
+
+// ==================== 个体 CRUD API ====================
+
+async function createIndividual(data) {
+  return await client.post('/individuals', data)
+}
+
+async function updateIndividual(id, data) {
+  return await client.put(`/individuals/${id}`, data)
+}
+
+async function deleteIndividual(id) {
+  return await client.delete(`/individuals/${id}`)
+}
+
+// ==================== 生长记录 API ====================
+
+async function createGrowthRecord(animalId, data) {
+  return await client.post(`/individuals/${animalId}/growth-records`, data)
+}
+
+// ==================== 健康记录 API ====================
+
+async function createHealthRecord(data) {
+  return await client.post('/health/records', data)
+}
+
+// ==================== 养殖操作 API ====================
+
+async function getOperations(params = {}) {
+  const { batch_id, op_type, start_date, end_date, page = 1, page_size = 20 } = params
+  const query = new URLSearchParams()
+  if (batch_id) query.append('batch_id', batch_id)
+  if (op_type) query.append('op_type', op_type)
+  if (start_date) query.append('start_date', start_date)
+  if (end_date) query.append('end_date', end_date)
+  query.append('page', page)
+  query.append('page_size', page_size)
+  return await client.get(`/operations?${query.toString()}`)
+}
+
+async function createOperation(data) {
+  return await client.post('/operations', data)
+}
+
+async function updateOperation(id, data) {
+  return await client.put(`/operations/${id}`, data)
+}
+
+async function deleteOperation(id) {
+  return await client.delete(`/operations/${id}`)
+}
+
+// ==================== 销售管理 API ====================
+
+async function getSales(params = {}) {
+  const { status, customer_name, start_date, end_date, page = 1, page_size = 20 } = params
+  const query = new URLSearchParams()
+  if (status !== undefined && status !== '') query.append('status', status)
+  if (customer_name) query.append('customer_name', customer_name)
+  if (start_date) query.append('start_date', start_date)
+  if (end_date) query.append('end_date', end_date)
+  query.append('page', page)
+  query.append('page_size', page_size)
+  return await client.get(`/sales?${query.toString()}`)
+}
+
+async function getSaleDetail(id) {
+  return await client.get(`/sales/${id}`)
+}
+
+async function createSale(data) {
+  return await client.post('/sales', data)
+}
+
+async function updateSale(id, data) {
+  return await client.put(`/sales/${id}`, data)
+}
+
+async function deleteSale(id) {
+  return await client.delete(`/sales/${id}`)
+}
+
+// ==================== 采购管理 API ====================
+
+async function getPurchases(params = {}) {
+  const { status, supplier_name, start_date, end_date, page = 1, page_size = 20 } = params
+  const query = new URLSearchParams()
+  if (status !== undefined && status !== '') query.append('status', status)
+  if (supplier_name) query.append('supplier_name', supplier_name)
+  if (start_date) query.append('start_date', start_date)
+  if (end_date) query.append('end_date', end_date)
+  query.append('page', page)
+  query.append('page_size', page_size)
+  return await client.get(`/purchases?${query.toString()}`)
+}
+
+async function getPurchaseDetail(id) {
+  return await client.get(`/purchases/${id}`)
+}
+
+async function createPurchase(data) {
+  return await client.post('/purchases', data)
+}
+
+async function updatePurchase(id, data) {
+  return await client.put(`/purchases/${id}`, data)
+}
+
+async function deletePurchase(id) {
+  return await client.delete(`/purchases/${id}`)
+}
+
 // ==================== 统一导出 ====================
 const api = {
   login,
+  // 批次
   getBatches,
   getBatchDetail,
+  createBatch,
+  updateBatch,
+  deleteBatch,
+  // 品种
+  getBreeds,
+  getBreedDetail,
+  createBreed,
+  updateBreed,
+  deleteBreed,
+  // 鸡舍
+  getHouses,
+  getHouseDetail,
+  createHouse,
+  updateHouse,
+  deleteHouse,
+  // 个体
   getIndividuals,
   getIndividualDetail,
-  getBreedingOperations,
-  getHealthRecords,
-  getEnvironmentParams,
+  createIndividual,
+  updateIndividual,
+  deleteIndividual,
+  // 生长
   getGrowthCurve,
   getBatchGrowthSummary,
-  // Phase 3
+  createGrowthRecord,
+  // 操作
+  getBreedingOperations,
+  getOperations,
+  createOperation,
+  updateOperation,
+  deleteOperation,
+  // 健康
+  getHealthRecords,
+  createHealthRecord,
+  // 环境
+  getEnvironmentParams,
+  // 性能
   getBatchPerformance,
+  // 中试
   getPilotProjects,
   getPilotComparison,
+  // 财务
   getFinancialTransactions,
   createTransaction,
+  // 利润
   getProfitRanking,
+  // 溯源
   getTraceability,
+  // 库存
   getInventory,
   createInventoryTransaction,
-  getInventoryTransactions
+  getInventoryTransactions,
+  // 销售
+  getSales,
+  getSaleDetail,
+  createSale,
+  updateSale,
+  deleteSale,
+  // 采购
+  getPurchases,
+  getPurchaseDetail,
+  createPurchase,
+  updatePurchase,
+  deletePurchase
 }
 
 export default api

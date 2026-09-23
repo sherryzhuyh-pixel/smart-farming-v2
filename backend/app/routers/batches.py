@@ -347,3 +347,30 @@ async def get_batch_profit(batch_id: str, repos: RepositoryFactory = Depends(get
         "profit_per_bird": round(gross_profit / bird_count, 2),
         "computed": True,
     })
+
+
+@router.post("")
+async def create_batch(data: dict, repos: RepositoryFactory = Depends(get_repositories)):
+    """创建批次"""
+    batch = await repos.batch.create(data)
+    return success_response(batch, "创建成功")
+
+
+@router.put("/{batch_id}")
+async def update_batch(batch_id: str, data: dict, repos: RepositoryFactory = Depends(get_repositories)):
+    """更新批次"""
+    existing = await repos.batch.get_by_id(batch_id)
+    if not existing:
+        return error_response(404, "批次不存在")
+    updated = await repos.batch.update(batch_id, data)
+    return success_response(updated, "更新成功")
+
+
+@router.delete("/{batch_id}")
+async def delete_batch(batch_id: str, repos: RepositoryFactory = Depends(get_repositories)):
+    """删除批次"""
+    existing = await repos.batch.get_by_id(batch_id)
+    if not existing:
+        return error_response(404, "批次不存在")
+    await repos.batch.delete(batch_id)
+    return success_response(None, "删除成功")
