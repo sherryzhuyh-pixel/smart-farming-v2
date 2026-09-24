@@ -1,33 +1,47 @@
 #!/usr/bin/env python3
 """
-PythonAnywhere ASGI 入口文件
-PythonAnywhere 已支持原生 ASGI（2023-09 起），直接导出 FastAPI app
+PythonAnywhere WSGI entry - direct WSGI adapter (no uvicorn subprocess)
+Uses a2wsgi to wrap FastAPI ASGI app for uWSGI compatibility
 """
-import sys
 import os
+import sys
+import subprocess
 
-# 添加项目路径（根据 PythonAnywhere 用户名修改）
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+HOME = "/home/andrewzeng"
+PROJECT_DIR = f"{HOME}/smart-farming-v2/backend"
+VENV_PATH = f"{HOME}/.virtualenvs/smart-farming"
 
-# 生产环境默认配置（PythonAnywhere 部署时使用）
-# 请在 PythonAnywhere 环境变量中设置真实值，或复制此文件为 .env 并填入
-os.environ.setdefault("LARK_APP_ID", "cli_" + "your_app_id_here")
-os.environ.setdefault("LARK_APP_SECRET", "your_app_secret_here")
-os.environ.setdefault("LARK_BASE_TOKEN", "your_base_token_here")
-os.environ.setdefault("JWT_SECRET_KEY", "your_jwt_secret_here")
+if PROJECT_DIR not in sys.path:
+    sys.path.insert(0, PROJECT_DIR)
+
+py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+sp = os.path.join(VENV_PATH, "lib", f"python{py_ver}", "site-packages")
+if sp not in sys.path and os.path.exists(sp):
+    sys.path.insert(0, sp)
+
+# Install a2wsgi if not available
+pip = os.path.join(VENV_PATH, "bin", "pip")
+if os.path.exists(pip):
+    try:
+        import a2wsgi
+    except ImportError:
+        subprocess.run([pip, "install", "a2wsgi"], capture_output=True, timeout=120)
+
+os.environ.setdefault("LARK_APP_ID", "cli_aad1811323789bd8")
+os.environ.setdefault("LARK_APP_SECRET", "wX1K0Hrssj4LLfJ6psYjuXo4KTlcbOfA")
+os.environ.setdefault("LARK_BASE_TOKEN", "Oi1ObtIzLa7U8issGOGcO4JSneg")
+os.environ.setdefault("JWT_SECRET_KEY", "wHi_b-wglggDEP9bSbfWWCH5Vuo6H0wcKycQ4zIMxwuvTAj3n1sNxutsZFphDeOvv8xdAL3AwJEJAToYmPwfKA")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "120")
 os.environ.setdefault("CORS_ALLOWED_ORIGINS", "https://sherryzhuyh-pixel.github.io/smart-farming-v2,https://sherryzhuyh-pixel.github.io")
 os.environ.setdefault("ADMIN_USERNAME", "admin")
-os.environ.setdefault("ADMIN_PASSWORD_HASH", "your_password_hash_here")
+os.environ.setdefault("ADMIN_PASSWORD_HASH", "$2b$12$FiT00zOtLzsmqmb14lvZBe9irr.NwzYIpxHLKzG/fOSddRmAdM2jq")
 os.environ.setdefault("CACHE_DIR", "./cache")
-os.environ.setdefault("CACHE_SIZE_LIMIT", "52428800")
+os.environ.setdefault("CACHE_SIZE_LIMIT", "52428850")
 os.environ.setdefault("DEBUG", "false")
 
-# 导入 FastAPI ASGI 应用
+# Import FastAPI app and wrap with WSGI adapter
 from app.main import app  # noqa: E402
+from a2wsgi import ASGIMiddleware  # noqa: E402
 
-# PythonAnywhere ASGI 配置直接使用此 app 对象
-# 在 Web 配置页面选择 "ASGI" 模式并指向此文件
+application = ASGIMiddleware(app)

@@ -30,6 +30,7 @@ from app.routers import (
     environment,
     feed,
     market,
+    indicators,
 )
 
 settings = get_settings()
@@ -106,6 +107,13 @@ async def startup_event():
     app.state.base_client = base_client
     app.state.cache = base_client.cache
     app.state.repositories = repositories
+
+    # 同时注入到 repositories 模块全局变量，供 Depends 使用（避免 Request 参数暴露问题）
+    import sys
+    repo_mod = sys.modules["app.repositories"]
+    repo_mod._repositories = repositories
+    repo_mod._base_client = base_client
+    repo_mod._cache_instance = base_client.cache
 
     logger.info(
         "FeishuBaseClient initialized, base_token=%s...",
@@ -223,6 +231,9 @@ app.include_router(
 )
 app.include_router(
     market.router, prefix=api_prefix, dependencies=dependencies
+)
+app.include_router(
+    indicators.router, prefix="", dependencies=dependencies
 )
 
 

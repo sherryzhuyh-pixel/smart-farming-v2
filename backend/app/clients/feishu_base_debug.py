@@ -1,6 +1,5 @@
 """
-飞书 Base API 客户端封装
-职责: tenant_access_token 管理、请求重试、速率控制、分页处理
+飞书 Base API 客户端封装 (调试版本)
 """
 import asyncio
 import time
@@ -11,18 +10,14 @@ from diskcache import Cache
 
 
 class FeishuAPIError(Exception):
-    """飞书 API 业务错误"""
-
     def __init__(self, message: str, code: int = 0):
         super().__init__(message)
         self.code = code
 
 
 class FeishuBaseClient:
-    """飞书多维表格 API 客户端"""
-
     TOKEN_CACHE_KEY = "feishu_tenant_access_token"
-    TOKEN_TTL = 7000  # token 有效期 ~2h，提前缓存
+    TOKEN_TTL = 7000
 
     def __init__(
         self,
@@ -40,13 +35,11 @@ class FeishuBaseClient:
         self.client = httpx.AsyncClient(timeout=30.0, http2=True)
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        # 速率限制: 20 QPS (飞书开放平台默认) = 50ms 间隔
         self._last_request_time = 0.0
         self._min_interval = 0.05
         self._lock = asyncio.Lock()
 
     async def _get_tenant_access_token(self) -> str:
-        """获取/缓存 tenant_access_token"""
         cached = self.cache.get(self.TOKEN_CACHE_KEY)
         if cached:
             return cached
@@ -72,7 +65,8 @@ class FeishuBaseClient:
         path: str,
         **kwargs: Any,
     ) -> dict:
-        """统一请求封装（含速率控制和重试）"""
+        import logging
+        logger = logging.getLogger(__name__)
         token = await self._get_tenant_access_token()
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {token}"
@@ -81,7 +75,6 @@ class FeishuBaseClient:
         url = f"https://open.feishu.cn/open-apis{path}"
 
         for attempt in range(self.max_retries + 1):
-            # 速率控制
             async with self._lock:
                 now = time.time()
                 elapsed = now - self._last_request_time
@@ -93,16 +86,20 @@ class FeishuBaseClient:
                 resp = await self.client.request(
                     method, url, headers=headers, **kwargs
                 )
-                # 429 Too Many Requests -> 退避重试
                 if resp.status_code == 429:
                     wait = self.retry_delay * (2 ** attempt)
                     await asyncio.sleep(wait)
                     continue
+                
+                # DEBUG: log response before raising
+                if resp.status_code >= 400:
+                    body = resp.text[:500]
+                    logger.error(f"Feishu API error: {resp.status_code} {method} {path} | Body: {body}")
+                
                 resp.raise_for_status()
                 result = resp.json()
-                # 飞书业务错误码处理
                 if result.get("code") != 0:
-                    if result.get("code") == 99991663:  # token 过期
+                    if result.get("code") == 99991663:
                         self.cache.delete(self.TOKEN_CACHE_KEY)
                         continue
                     raise FeishuAPIError(
@@ -123,53 +120,28 @@ class FeishuBaseClient:
 
         raise FeishuAPIError("Max retries exceeded", 0)
 
-    # ── 表记录操作 ──
-
     async def list_records(
         self,
         table_id: str,
         filter_expr: Optional[str] = None,
-        filter_structured: Optional[dict] = None,
         sort: Optional[list] = None,
         page_size: int = 500,
     ) -> AsyncIterator[dict]:
-        """分页遍历表记录（生成器，内存友好）
-        filter_structured: 结构化 filter 对象，用于 POST /records/search
-        filter_expr: 字符串 filter 表达式（遗留，推荐用 structured）
-        """
         page_token = None
         while True:
-            if filter_structured:
-                # 使用 POST search 端点 + 结构化 filter
-                body: dict[str, Any] = {
-                    "filter": filter_structured,
-                    "page_size": min(page_size, 500),
-                }
-                if sort:
-                    body["sort"] = sort
-                if page_token:
-                    body["page_token"] = page_token
+            params: dict[str, Any] = {"page_size": min(page_size, 500)}
+            if filter_expr:
+                params["filter"] = filter_expr
+            if sort:
+                params["sort"] = sort
+            if page_token:
+                params["page_token"] = page_token
 
-                result = await self._request(
-                    "POST",
-                    f"/bitable/v1/apps/{self.base_token}/tables/{table_id}/records/search",
-                    json=body,
-                )
-            else:
-                # 使用 GET records 端点（无 filter 或字符串 filter）
-                params: dict[str, Any] = {"page_size": min(page_size, 500)}
-                if filter_expr:
-                    params["filter"] = filter_expr
-                if sort:
-                    params["sort"] = sort
-                if page_token:
-                    params["page_token"] = page_token
-
-                result = await self._request(
-                    "GET",
-                    f"/bitable/v1/apps/{self.base_token}/tables/{table_id}/records",
-                    params=params,
-                )
+            result = await self._request(
+                "GET",
+                f"/bitable/v1/apps/{self.base_token}/tables/{table_id}/records",
+                params=params,
+            )
             items = result["data"]["items"]
             for item in items:
                 yield self._normalize_record(item)
@@ -181,7 +153,6 @@ class FeishuBaseClient:
     async def get_record(
         self, table_id: str, record_id: str
     ) -> Optional[dict]:
-        """按 record_id 获取单条记录"""
         try:
             result = await self._request(
                 "GET",
@@ -194,7 +165,6 @@ class FeishuBaseClient:
             raise
 
     async def create_record(self, table_id: str, fields: dict) -> dict:
-        """创建记录"""
         result = await self._request(
             "POST",
             f"/bitable/v1/apps/{self.base_token}/tables/{table_id}/records",
@@ -205,7 +175,6 @@ class FeishuBaseClient:
     async def batch_create_records(
         self, table_id: str, records: list[dict]
     ) -> list[dict]:
-        """批量创建记录（飞书限制单次最多 100 条）"""
         BATCH_SIZE = 100
         created = []
         for i in range(0, len(records), BATCH_SIZE):
@@ -226,7 +195,6 @@ class FeishuBaseClient:
     async def update_record(
         self, table_id: str, record_id: str, fields: dict
     ) -> dict:
-        """更新记录"""
         result = await self._request(
             "PUT",
             f"/bitable/v1/apps/{self.base_token}/tables/{table_id}/records/{record_id}",
@@ -237,7 +205,6 @@ class FeishuBaseClient:
     async def batch_update_records(
         self, table_id: str, records: list[tuple[str, dict]]
     ) -> list[dict]:
-        """批量更新记录（飞书限制单次最多 100 条）"""
         BATCH_SIZE = 100
         updated = []
         for i in range(0, len(records), BATCH_SIZE):
@@ -262,7 +229,6 @@ class FeishuBaseClient:
     async def delete_record(
         self, table_id: str, record_id: str
     ) -> None:
-        """删除记录"""
         await self._request(
             "DELETE",
             f"/bitable/v1/apps/{self.base_token}/tables/{table_id}/records/{record_id}",
@@ -271,7 +237,6 @@ class FeishuBaseClient:
     async def batch_delete_records(
         self, table_id: str, record_ids: list[str]
     ) -> None:
-        """批量删除记录（飞书限制单次最多 100 条）"""
         BATCH_SIZE = 100
         for i in range(0, len(record_ids), BATCH_SIZE):
             batch = record_ids[i : i + BATCH_SIZE]
@@ -287,41 +252,27 @@ class FeishuBaseClient:
         field_name: str,
         value: Any,
     ) -> AsyncIterator[dict]:
-        """按字段值搜索记录（使用结构化 filter）
-        字段名使用白名单校验，防止注入
-        """
         import re
         if not re.match(r'^[\w\u4e00-\u9fff]+$', field_name):
             raise ValueError(f"Invalid field_name: {field_name}")
 
-        # 构建结构化 filter
         if isinstance(value, bool):
-            filter_val = ["true" if value else "false"]
+            val_str = "true" if value else "false"
+            filter_expr = f'CurrentValue.["{field_name}"] = {val_str}'
         elif isinstance(value, (int, float)):
-            filter_val = [str(value)]
+            filter_expr = f'CurrentValue.["{field_name}"] = {value}'
         else:
-            filter_val = [str(value)]
-
-        structured_filter = {
-            "conjunction": "and",
-            "conditions": [
-                {
-                    "field_name": field_name,
-                    "operator": "is",
-                    "value": filter_val,
-                }
-            ],
-        }
+            import json
+            safe_value = json.dumps(str(value))
+            filter_expr = f'CurrentValue.["{field_name}"] = {safe_value}'
         async for record in self.list_records(
-            table_id, filter_structured=structured_filter
+            table_id, filter_expr=filter_expr
         ):
             yield record
 
     def _normalize_record(self, raw: dict) -> dict:
-        """规范化飞书返回的记录格式"""
         record_id = raw.get("record_id") or raw.get("id")
         fields = raw.get("fields", {})
-        # 将 record_id 注入字段，方便应用层使用
         fields["_record_id"] = record_id
         return fields
 
